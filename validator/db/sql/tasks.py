@@ -563,7 +563,6 @@ async def get_tasks(psql_db: PSQLDB, limit: int = 100, offset: int = 0) -> List[
         rows = await connection.fetch(query, limit, offset)
         return [Task(**dict(row)) for row in rows]
 
-
 async def get_tasks_by_account_id(
     psql_db: PSQLDB, account_id: UUID, limit: int = 100, offset: int = 0
 ) -> List[TextTask | ImageTask]:
