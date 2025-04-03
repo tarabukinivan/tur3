@@ -264,7 +264,7 @@ async def generate_style_synthetic(config: Config, num_prompts: int) -> tuple[li
 
     return image_text_pairs, f"{first_style}_and_{second_style}"
 
-
+  
 async def generate_person_synthetic(num_prompts: int) -> tuple[list[ImageTextPair], str]:
     client = docker.from_env()
     image_text_pairs = []
@@ -277,6 +277,7 @@ async def generate_person_synthetic(num_prompts: int) -> tuple[list[ImageTextPai
             device_requests=[docker.types.DeviceRequest(capabilities=[["gpu"]], device_ids=["0"])],
             detach=True,
         )
+
         result = await asyncio.to_thread(container.wait)
         images_dir = Path(tmp_dir_path)
         for file in images_dir.iterdir():
@@ -309,6 +310,8 @@ async def create_synthetic_image_task(config: Config, models: AsyncGenerator[str
         image_text_pairs, ds_prefix = await generate_style_synthetic(config, num_prompts)
     else:
         image_text_pairs, ds_prefix = await generate_person_synthetic(num_prompts)
+
+
 
     task = ImageRawTask(
         model_id=model_id,
