@@ -17,7 +17,9 @@ import docker
 from fiber import Keypair
 
 import validator.core.constants as cst
+from core.models.payload_models import ImageModelInfo
 from core.models.payload_models import ImageTextPair
+from core.models.utility_models import ImageModelType
 from core.models.utility_models import Message
 from core.models.utility_models import Role
 from core.models.utility_models import TaskStatus
@@ -110,8 +112,9 @@ IMAGE_STYLES = [
     "Fantasy Realism",
 ]
 
-with open(cst.EXAMPLE_PROMPTS_PATH, 'r') as f:
+with open(cst.EXAMPLE_PROMPTS_PATH, "r") as f:
     FULL_PROMPTS = json.load(f)
+
 
 def create_image_style_compatibility_messages(first_style: str, second_style: str) -> List[Message]:
     system_content = """You are an expert in spotting incompatible artistic styles for image generation.
@@ -129,9 +132,9 @@ Example Output:
 
 
 def create_combined_diffusion_messages(first_style: str, second_style: str, num_prompts: int) -> List[Message]:
-    system_content = f"""You are an expert in creating diverse and descriptive prompts for image generation models.
+    system_content = """You are an expert in creating diverse and descriptive prompts for image generation models.
     Your task is to generate prompts that strongly embody a combination of two artistic styles.
-    Each prompt should be detailed and consistent with both of the given styles. 
+    Each prompt should be detailed and consistent with both of the given styles.
     You will return the prompts in a JSON format with no additional text.
     """
 
@@ -151,10 +154,10 @@ def create_combined_diffusion_messages(first_style: str, second_style: str, num_
 
 def create_single_style_diffusion_messages(style: str, num_prompts: int) -> List[Message]:
     prompt_examples = ",\n    ".join([f'"{prompt}"' for prompt in random.sample(FULL_PROMPTS[style], 5)])
-    
+
     system_content = f"""You are an expert in creating diverse and descriptive prompts for image generation models.
     Your task is to generate prompts that strongly embody a combination of an artistic style.
-    Each prompt should be detailed and consistent with the given style. 
+    Each prompt should be detailed and consistent with the given style.
     You will return the prompts in a JSON format with no additional text.
 
     Here are some examples of prompts in the {style} style, you need to follow the same format and generate more in the same style:
@@ -179,7 +182,9 @@ def create_single_style_diffusion_messages(style: str, num_prompts: int) -> List
 
 
 @retry_with_backoff
-async def generate_diffusion_prompts(first_style: str, second_style: str, keypair: Keypair, num_prompts: int, combined: bool) -> List[str]:
+async def generate_diffusion_prompts(
+    first_style: str, second_style: str, keypair: Keypair, num_prompts: int, combined: bool
+) -> List[str]:
     if combined:
         messages = create_combined_diffusion_messages(first_style, second_style, num_prompts)
         style_description = f"{first_style} and {second_style}"
@@ -188,10 +193,7 @@ async def generate_diffusion_prompts(first_style: str, second_style: str, keypai
         style_description = first_style
 
     payload = convert_to_nineteen_payload(
-        messages,
-        cst.IMAGE_PROMPT_GEN_MODEL,
-        cst.IMAGE_PROMPT_GEN_MODEL_TEMPERATURE,
-        cst.IMAGE_PROMPT_GEN_MODEL_MAX_TOKENS
+        messages, cst.IMAGE_PROMPT_GEN_MODEL, cst.IMAGE_PROMPT_GEN_MODEL_TEMPERATURE, cst.IMAGE_PROMPT_GEN_MODEL_MAX_TOKENS
     )
 
     result = await post_to_nineteen_chat_with_reasoning(payload, keypair, cst.END_OF_REASONING_TAG)
@@ -299,7 +301,7 @@ async def generate_style_synthetic(config: Config, num_prompts: int) -> tuple[li
 
     return image_text_pairs, ds_prefix
 
-  
+
 async def generate_person_synthetic(num_prompts: int) -> tuple[list[ImageTextPair], str]:
     client = docker.from_env()
     image_text_pairs = []
@@ -335,21 +337,21 @@ async def generate_person_synthetic(num_prompts: int) -> tuple[list[ImageTextPai
     return image_text_pairs, cst.PERSON_SYNTH_DS_PREFIX
 
 
-async def create_synthetic_image_task(config: Config, models: AsyncGenerator[str, None]) -> RawTask:
+async def create_synthetic_image_task(config: Config, models: AsyncGenerator[ImageModelInfo, None]) -> RawTask:
     """Create a synthetic image task with random model and style."""
+    logger.info("Creating synthetic image task")
     number_of_hours = random.randint(cst.MIN_IMAGE_COMPETITION_HOURS, cst.MAX_IMAGE_COMPETITION_HOURS)
     num_prompts = random.randint(cst.MIN_IMAGE_SYNTH_PAIRS, cst.MAX_IMAGE_SYNTH_PAIRS)
-    model_id = await anext(models)
+    model_info = await anext(models)
     Path(cst.TEMP_PATH_FOR_IMAGES).mkdir(parents=True, exist_ok=True)
-    if random.random() < cst.PERCENTAGE_OF_IMAGE_SYNTHS_SHOULD_BE_STYLE:
+    is_flux_model = model_info.model_type == ImageModelType.FLUX
+    if random.random() < cst.PERCENTAGE_OF_IMAGE_SYNTHS_SHOULD_BE_STYLE and not is_flux_model:
         image_text_pairs, ds_prefix = await generate_style_synthetic(config, num_prompts)
     else:
         image_text_pairs, ds_prefix = await generate_person_synthetic(num_prompts)
 
-
-
     task = ImageRawTask(
-        model_id=model_id,
+        model_id=model_info.model_id,
         ds=ds_prefix.replace(" ", "_").lower() + "_" + str(uuid.uuid4()),
         image_text_pairs=image_text_pairs,
         status=TaskStatus.PENDING,
@@ -358,6 +360,7 @@ async def create_synthetic_image_task(config: Config, models: AsyncGenerator[str
         termination_at=datetime.utcnow() + timedelta(hours=number_of_hours),
         hours_to_complete=number_of_hours,
         account_id=cst.NULL_ACCOUNT_ID,
+        model_type=model_info.model_type,
     )
 
     logger.info(f"New task created and added to the queue {task}")
