@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -7,7 +6,7 @@ class BaseConfig:
     wallet_name: str
     hotkey_name: str
     subtensor_network: str
-    subtensor_address: Optional[str]
+    subtensor_address: str | None = None
     netuid: int
     env: str
 
@@ -24,11 +23,11 @@ class MinerConfig(BaseConfig):
 
 @dataclass
 class ValidatorConfig(BaseConfig):
-    postgres_user: str
-    postgres_password: str
-    postgres_db: str
-    postgres_host: str
-    postgres_port: str
+    postgres_user: str | None = None
+    postgres_password: str | None = None
+    postgres_db: str | None = None
+    postgres_host: str | None = None
+    postgres_port: str | None = None
     s3_compatible_endpoint: str
     s3_compatible_access_key: str
     s3_compatible_secret_key: str
@@ -38,12 +37,14 @@ class ValidatorConfig(BaseConfig):
     set_metagraph_weights: bool
     validator_port: str
     gpu_ids: str
-    gpu_server: Optional[str] = None
+    gpu_server: str | None = None
     localhost: bool = False
     env_file: str = ".vali.env"
     hf_datasets_trust_remote_code = True
     s3_region: str = "us-east-1"
     refresh_nodes: bool = True
+    database_url: str | None = None
+    postgres_profile: str = "default"
 
 
 @dataclass
