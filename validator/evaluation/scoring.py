@@ -10,16 +10,15 @@ import validator.core.constants as cts
 from core.models.payload_models import DiffusionLosses
 from core.models.payload_models import EvaluationResultImage
 from core.models.payload_models import EvaluationResultText
-from core.models.utility_models import DPODatasetType
+from core.models.utility_models import DpoDatasetType
 from core.models.utility_models import FileFormat
-from core.models.utility_models import InstructDatasetType
+from core.models.utility_models import GrpoDatasetType
+from core.models.utility_models import InstructTextDatasetType
 from core.models.utility_models import TaskStatus
 from core.models.utility_models import TaskType
 from core.utils import download_s3_file
 from validator.core.config import Config
-from validator.core.models import DpoRawTask
-from validator.core.models import ImageRawTask
-from validator.core.models import InstructTextRawTask
+from validator.core.models import AnyTypeRawTask
 from validator.core.models import MinerResults
 from validator.core.models import MinerResultsImage
 from validator.core.models import MinerResultsText
@@ -320,9 +319,9 @@ def calculate_miner_ranking_and_scores(
     return miner_results
 
 
-def _get_dataset_type(task: InstructTextRawTask | DpoRawTask) -> InstructDatasetType | DPODatasetType:
+def _get_dataset_type(task: AnyTypeRawTask) -> InstructTextDatasetType | DpoDatasetType | GrpoDatasetType | None:
     if task.task_type == TaskType.INSTRUCTTEXTTASK:
-        return InstructDatasetType(
+        return InstructTextDatasetType(
             field_system=task.field_system,
             field_instruction=task.field_instruction,
             field_input=task.field_input,
@@ -330,8 +329,10 @@ def _get_dataset_type(task: InstructTextRawTask | DpoRawTask) -> InstructDataset
             format=task.format,
             no_input_format=task.no_input_format,
         )
+    elif task.task_type == TaskType.IMAGETASK:
+        return None
     elif task.task_type == TaskType.DPOTASK:
-        return DPODatasetType(
+        return DpoDatasetType(
             field_prompt=task.field_prompt,
             field_system=task.field_system,
             field_chosen=task.field_chosen,
@@ -340,12 +341,17 @@ def _get_dataset_type(task: InstructTextRawTask | DpoRawTask) -> InstructDataset
             chosen_format=task.chosen_format,
             rejected_format=task.rejected_format,
         )
+    elif task.task_type == TaskType.GRPOTASK:
+        return GrpoDatasetType(
+            field_prompt=task.field_prompt,
+            reward_functions=task.reward_functions,
+        )
     else:
-        raise ValueError(f"Invalid task type: {task.task_type}")
+        raise ValueError(f"Unknown task type: {task.task_type}")
 
 
 def _create_failed_miner_result(hotkey: str, reason: str, task_type: TaskType) -> MinerResults:
-    if task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK]:
+    if task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
         return MinerResultsText(
             hotkey=hotkey,
             test_loss=np.nan,
@@ -394,16 +400,16 @@ async def _get_submission_repo(miner: Node, task_id: str, config: Config) -> str
 
 
 async def _evaluate_submissions(
-    task: InstructTextRawTask | ImageRawTask | DpoRawTask,
+    task: AnyTypeRawTask,
     submission_repos: list[str],
     gpu_ids: list[int],
-    dataset_type: InstructDatasetType | DPODatasetType | None = None,
+    dataset_type: InstructTextDatasetType | DpoDatasetType | GrpoDatasetType | None = None,
 ) -> dict[str, tuple[EvaluationResultText, EvaluationResultText] | EvaluationResultImage | Exception]:
     unique_repos = list(set(submission_repos))
     if len(unique_repos) != len(submission_repos):
         logger.warning(f"Found duplicate repos. Deduplicating {len(submission_repos)} repos to {len(unique_repos)} unique repos")
 
-    if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK]:
+    if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
         results: dict[str, tuple[EvaluationResultText, EvaluationResultText] | Exception] = {}
         repos_to_evaluate = []
         for repo in unique_repos:
@@ -538,7 +544,7 @@ async def _clear_up_s3(file_paths: list[str]) -> None:
 
 
 async def _update_scores(
-    task: InstructTextRawTask | DpoRawTask | ImageRawTask, task_results: list[MinerResultsText | MinerResultsImage], psql_db
+    task: AnyTypeRawTask, task_results: list[MinerResultsText | MinerResultsImage], psql_db
 ) -> None:
     assert task.task_id is not None, "task id needs to be set to update scores"
     for result in task_results:
@@ -627,10 +633,10 @@ def zero_duplicate_scores(
 
 async def process_miners_pool(
     miners: list[Node],
-    task: ImageRawTask | InstructTextRawTask | DpoRawTask,
+    task: AnyTypeRawTask,
     config: Config,
     gpu_ids: list[int],
-    dataset_type: InstructDatasetType | DPODatasetType | None = None,
+    dataset_type: InstructTextDatasetType | DpoDatasetType | GrpoDatasetType | None = None,
 ) -> list[MinerResultsText | MinerResultsImage]:
     assert task.task_id is not None, "We should have a task id when processing miners"
 
@@ -681,7 +687,7 @@ async def process_miners_pool(
                             _create_failed_miner_result(miner.hotkey, reason="Evaluation failed", task_type=task.task_type)
                         )
                         continue
-                    elif task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK]:
+                    elif task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
                         synth_result, test_result = eval_result
                     elif task.task_type == TaskType.IMAGETASK:
                         test_result = eval_result
@@ -698,7 +704,7 @@ async def process_miners_pool(
                         updated_on=datetime.now(),
                     )
 
-                if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK]:
+                if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
                     results.append(
                         MinerResultsText(
                             hotkey=miner.hotkey,
@@ -737,19 +743,12 @@ async def process_miners_pool(
 
 
 
-async def evaluate_and_score(
-    task: InstructTextRawTask | DpoRawTask | ImageRawTask, gpu_ids: list[int], config: Config
-) -> InstructTextRawTask | DpoRawTask | ImageRawTask:
+async def evaluate_and_score(task: AnyTypeRawTask, gpu_ids: list[int], config: Config) -> AnyTypeRawTask:
     assert task.task_id is not None, "Task ID must be present"
     assert task.test_data is not None, "Test data must be present"
 
     miner_pool = await get_nodes_assigned_to_task(str(task.task_id), config.psql_db)
-    if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK]:
-        dataset_type = _get_dataset_type(task)
-    elif task.task_type == TaskType.IMAGETASK:
-        dataset_type = None
-    else:
-        raise ValueError(f"Unknown task type: {task.task_type}")
+    dataset_type = _get_dataset_type(task)
 
     logger.info(f"Beginning evaluation for task {task.task_id} with {len(miner_pool)} miners")
     task_results = await process_miners_pool(miner_pool, task, config, gpu_ids, dataset_type)
@@ -764,7 +763,7 @@ async def evaluate_and_score(
     all_scores_zero = all(result.score == 0.0 for result in task_results)
 
     if cts.DELETE_S3_AFTER_COMPLETE:
-        if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK]:
+        if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
             files_to_delete = [task.training_data, task.test_data, task.synthetic_data]
         elif task.task_type == TaskType.IMAGETASK:
             files_to_delete = [task.training_data, task.test_data]

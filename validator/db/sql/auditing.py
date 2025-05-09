@@ -9,8 +9,12 @@ from loguru import logger  # noqa
 from core.models.utility_models import TaskType
 from validator.core.config import Config
 from validator.core.dependencies import get_config
+from validator.core.models import AnyTypeTask
+from validator.core.models import AnyTypeTaskWithHotkeyDetails
 from validator.core.models import DpoTask
 from validator.core.models import DpoTaskWithHotkeyDetails
+from validator.core.models import GrpoTask
+from validator.core.models import GrpoTaskWithHotkeyDetails
 from validator.core.models import HotkeyDetails
 from validator.core.models import ImageTask
 from validator.core.models import ImageTaskWithHotkeyDetails
@@ -35,7 +39,7 @@ def normalise_float(float: float | None) -> float | None:
 
 async def get_recent_tasks(
     hotkeys: list[str] | None = None, limit: int = 100, page: int = 1, config: Config = Depends(get_config)
-) -> list[InstructTextTask | ImageTask | DpoTask]:
+) -> list[AnyTypeTask]:
     full_tasks_list = []
     if hotkeys is not None:
         query = f"""
@@ -78,7 +82,7 @@ async def get_recent_tasks(
 
 async def _process_task_batch(
     connection, hotkey: str, task_ids: list[str]
-) -> list[InstructTextTaskWithHotkeyDetails | ImageTaskWithHotkeyDetails | DpoTaskWithHotkeyDetails]:
+) -> list[AnyTypeTaskWithHotkeyDetails]:
     """
     Helper function to process a batch of task IDs.
     """
@@ -157,6 +161,7 @@ async def _process_task_batch(
     instruct_text_task_ids = []
     image_task_ids = []
     dpo_task_ids = []
+    grpo_task_ids = []
 
     for task_id, task_data in tasks_by_id.items():
         task_type = task_data.get(cst.TASK_TYPE)
@@ -166,6 +171,8 @@ async def _process_task_batch(
             image_task_ids.append(task_id)
         elif task_type == TaskType.DPOTASK.value:
             dpo_task_ids.append(task_id)
+        elif task_type == TaskType.GRPOTASK.value:
+            grpo_task_ids.append(task_id)
 
     # Get all InstructTextTask specific data in one query
     instruct_text_task_data = {}
@@ -200,6 +207,18 @@ async def _process_task_batch(
         rows = await connection.fetch(query, *dpo_task_ids)
         dpo_task_data = {str(row[cst.TASK_ID]): dict(row) for row in rows}
 
+    # Get all GrpoTask specific data in one query
+    grpo_task_data = {}
+    if grpo_task_ids:
+        placeholders = ", ".join("$%d::uuid" % (i + 1) for i in range(len(grpo_task_ids)))
+        query = f"""
+            SELECT * FROM {cst.GRPO_TASKS_TABLE}
+            WHERE {cst.TASK_ID} IN ({placeholders})
+        """
+        rows = await connection.fetch(query, *grpo_task_ids)
+        grpo_task_data = {str(row[cst.TASK_ID]): dict(row) for row in rows}
+
+
     # Step 6: Assemble final results
     for task_id in task_ids:
         if task_id not in tasks_by_id:
@@ -214,6 +233,8 @@ async def _process_task_batch(
             task_data.update(image_task_data[task_id])
         elif task_type == TaskType.DPOTASK.value and task_id in dpo_task_data:
             task_data.update(dpo_task_data[task_id])
+        elif task_type == TaskType.GRPOTASK.value and task_id in grpo_task_data:
+            task_data.update(grpo_task_data[task_id])
 
         hotkey_details = []
         if task_id in details_by_task_id:
@@ -247,13 +268,18 @@ async def _process_task_batch(
             task = DpoTask(**task_fields)
             task = hide_sensitive_data_till_finished(task)
             tasks_with_details.append(DpoTaskWithHotkeyDetails(**task.model_dump(), hotkey_details=hotkey_details))
+        elif task_type == TaskType.GRPOTASK.value:
+            task_fields = {k: v for k, v in task_data.items() if k in GrpoTask.model_fields}
+            task = GrpoTask(**task_fields)
+            task = _check_if_task_has_finished(task)
+            tasks_with_details.append(GrpoTaskWithHotkeyDetails(**task.model_dump(), hotkey_details=hotkey_details))
 
     return tasks_with_details
 
 
 async def get_recent_tasks_for_hotkey(
     hotkey: str, limit: int = 100, page: int = 1, config: Config = Depends(get_config)
-) -> list[InstructTextTaskWithHotkeyDetails | ImageTaskWithHotkeyDetails | DpoTaskWithHotkeyDetails]:
+) -> list[AnyTypeTaskWithHotkeyDetails]:
     """
     Retrieves recent tasks for a specific hotkey with detailed information.
     """
@@ -289,10 +315,7 @@ async def get_recent_tasks_for_hotkey(
 
         return await _process_task_batch(connection, hotkey, task_ids)
 
-
-async def get_task_with_hotkey_details(
-    task_id: str, config: Config = Depends(get_config)
-) -> InstructTextTaskWithHotkeyDetails | ImageTaskWithHotkeyDetails | DpoTaskWithHotkeyDetails:
+async def get_task_with_hotkey_details(task_id: str, config: Config = Depends(get_config)) -> AnyTypeTaskWithHotkeyDetails:
     # First get all the task details like normal
     task_raw = await tasks_sql.get_task_by_id(task_id, config.psql_db)
     if task_raw is None:
@@ -347,6 +370,8 @@ async def get_task_with_hotkey_details(
         return ImageTaskWithHotkeyDetails(**task.model_dump(), hotkey_details=hotkey_details)
     elif task.task_type == TaskType.DPOTASK:
         return DpoTaskWithHotkeyDetails(**task.model_dump(), hotkey_details=hotkey_details)
+    elif task.task_type == TaskType.GRPOTASK:
+        return GrpoTaskWithHotkeyDetails(**task.model_dump(), hotkey_details=hotkey_details)
 
 
 async def store_latest_scores_url(url: str, config: Config = Depends(get_config)) -> None:

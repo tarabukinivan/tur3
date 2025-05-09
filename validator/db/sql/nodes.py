@@ -1,6 +1,4 @@
 import datetime
-from typing import List
-from typing import Optional
 
 from asyncpg.connection import Connection
 from fiber import SubstrateInterface
@@ -15,7 +13,7 @@ from validator.utils.query_substrate import query_substrate
 
 logger = get_logger(__name__)
 
-async def get_eligible_nodes(psql_db: PSQLDB) -> List[Node]:
+async def get_eligible_nodes(psql_db: PSQLDB) -> list[Node]:
     """
     Get all nodes eligible for tasks.
     
@@ -63,7 +61,7 @@ async def get_eligible_nodes(psql_db: PSQLDB) -> List[Node]:
         logger.info(f"Found {len(eligible_nodes)} eligible nodes")
         return eligible_nodes
 
-async def get_all_nodes(psql_db: PSQLDB) -> List[Node]:
+async def get_all_nodes(psql_db: PSQLDB) -> list[Node]:
     """Get all nodes for the current NETUID"""
     logger.info("Attempting to get all nodes")
     async with await psql_db.connection() as connection:
@@ -124,7 +122,7 @@ async def insert_nodes(connection: Connection, nodes: list[Node]) -> None:
     )
 
 
-async def get_node_by_hotkey(hotkey: str, psql_db: PSQLDB) -> Optional[Node]:
+async def get_node_by_hotkey(hotkey: str, psql_db: PSQLDB) -> Node | None:
     """Get node by hotkey for the current NETUID"""
     async with await psql_db.connection() as connection:
         connection: Connection
