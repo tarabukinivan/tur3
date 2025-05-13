@@ -215,19 +215,23 @@ def calculate_miner_ranking_and_scores(
     miner_results: list[MinerResultsText | MinerResultsImage],
 ) -> list[MinerResultsText | MinerResultsImage]:
     logger.info("Beginning score calculation...")
+
+    # Initialize all scores to 0.0 and set appropriate reasons
     for result in miner_results:
         with LogContext(miner_hotkey=result.hotkey):
             result.score = 0.0
+
             if not result.is_finetune:
                 result.score_reason = "Non-finetuned submission"
-                logger.info(f"Miner {result.hotkey}: Non-finetuned, score set to 0.0")
+                logger.info(f"Miner {result.hotkey}: Non-finetuned, score initialized to 0.0")
             elif np.isnan(result.test_loss):
                 result.score_reason = "Invalid test loss"
-                logger.info(f"Miner {result.hotkey}: Invalid test loss, score set to 0.0")
+                logger.info(f"Miner {result.hotkey}: Invalid test loss, score initialized to 0.0")
             elif result.synth_loss == 1000.0:
                 result.score_reason = "Outside of top-4 test doesn't get scored."
                 logger.info(f"Miner {result.hotkey}: Outside of top-4")
 
+    # Filter to only include valid results for ranking
     valid_results = [result for result in miner_results if result.is_finetune and not np.isnan(result.test_loss)]
     if not valid_results:
         logger.warning("No valid finetuned submissions found. All scores set to 0.0")
@@ -333,6 +337,17 @@ def calculate_miner_ranking_and_scores(
                     f" score_reason={result.score_reason}"
                 )
 
+    # Apply penalty scores to failed submissions when valid submissions exist
+    if valid_results:
+        for result in miner_results:
+            # Find failed submissions that haven't been scored yet
+            if (not result.is_finetune or np.isnan(result.test_loss)) and result.score == 0.0:
+                result.score = cts.SCORE_PENALTY
+                logger.info(
+                    f"Miner {result.hotkey}: Failed submission ({result.score_reason}), "
+                    f"applying penalty score {cts.SCORE_PENALTY}"
+                )
+
     return miner_results
 
 
@@ -368,6 +383,8 @@ def _get_dataset_type(task: AnyTypeRawTask) -> InstructTextDatasetType | DpoData
 
 
 def _create_failed_miner_result(hotkey: str, reason: str, task_type: TaskType) -> MinerResults:
+    """Create a result object for failed miner submissions with initial score of 0.0.
+    The score may later be adjusted to a penalty if valid submissions exist."""
     if task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
         return MinerResultsText(
             hotkey=hotkey,
@@ -629,8 +646,8 @@ async def handle_duplicate_submissions(task_results: list[MinerResultsText | Min
                 with LogContext(miner_hotkey=hotkey):
                     keep_submission[hotkey] = False
                     logger.warning(
-                        f"Setting score to 0 for node {hotkey} (repo: {repo}) "
-                        f"as it has identical losses to earlier submission "
+                        f"Marking duplicate submission for node {hotkey} (repo: {repo}) "
+                        f"as it has identical losses to another submission"
                     )
 
     return keep_submission
@@ -639,12 +656,27 @@ async def handle_duplicate_submissions(task_results: list[MinerResultsText | Min
 def zero_duplicate_scores(
     task_results: list[MinerResultsText | MinerResultsImage], keep_submission: dict[str, bool]
 ) -> list[MinerResultsText | MinerResultsImage]:
+    # Count remaining valid submissions after filtering duplicates
+    remaining_valid_count = sum(
+        1 for result in task_results
+        if result.is_finetune and not np.isnan(result.test_loss) and keep_submission.get(result.hotkey, False)
+    )
+
     for result in task_results:
         if not keep_submission[result.hotkey]:
             result.test_loss = np.nan
             result.synth_loss = np.nan
             result.is_finetune = False
             result.score_reason = result.score_reason or "Duplicated submission"
+
+            # Apply penalty only if valid submissions remain
+            if remaining_valid_count > 0:
+                result.score = cts.SCORE_PENALTY
+                logger.info(f"Miner {result.hotkey}: Duplicate submission, applying penalty score {cts.SCORE_PENALTY}")
+            else:
+                result.score = 0.0
+                logger.info(f"Miner {result.hotkey}: Duplicate submission but no valid submissions remain, score set to 0.0")
+
     return task_results
 
 
