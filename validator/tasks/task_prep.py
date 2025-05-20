@@ -1,4 +1,6 @@
 import ast
+import asyncio
+import json
 import os
 import random
 import shutil
@@ -13,6 +15,9 @@ from datasets import DatasetDict
 from datasets import concatenate_datasets
 from datasets import load_dataset
 from fiber import Keypair
+
+from validator.augmentation.augmentation import generate_dpo_reformulation
+from validator.augmentation.augmentation import load_prompts
 
 import validator.core.constants as cst
 from core.models.payload_models import DpoDatasetColumnsResponse
@@ -370,6 +375,119 @@ def validate_and_transform_dpo(data: DpoDatasetColumnsResponse, task: DpoRawTask
     return {task.field_prompt: data.field_prompt, task.field_chosen: data.field_chosen, task.field_rejected: data.field_rejected}
 
 
+async def generate_synthetic_dpo_data(dataset: Dataset, keypair: Keypair, task: DpoRawTask) -> list[dict]:
+    prompt_field = task.field_prompt
+    logger.info(f"Generating synthetic DPO data from the field {prompt_field}")
+    
+    num_samples = min(cst.DPO_SYNTHETIC_TOTAL_SIZE * 2, len(dataset))
+    
+    sampled_data = dataset.shuffle(seed=42).select(range(num_samples))
+    prompts = sampled_data[prompt_field]
+    
+    prompts_for_gen = [{prompt_field: prompt} for prompt in prompts]
+    
+    prompts_obj = load_prompts()
+    logger.info(f"Attempting to generate {cst.DPO_SYNTHETIC_TOTAL_SIZE} synthetic DPO samples")
+    
+    synthetic_dataset = []
+    json_errors = 0
+    generic_errors = 0
+    consecutive_errors = 0
+    max_consecutive_errors = 10
+    max_retry_attempts = 3
+    max_batch_retries = 2
+
+    total_batches = (len(prompts_for_gen) + cst.SYNTH_GEN_BATCH_SIZE - 1) // cst.SYNTH_GEN_BATCH_SIZE
+    batch_idx = 0
+    
+    while len(synthetic_dataset) < cst.DPO_SYNTHETIC_TOTAL_SIZE and batch_idx < len(prompts_for_gen):
+        end_idx = min(batch_idx + cst.SYNTH_GEN_BATCH_SIZE, len(prompts_for_gen))
+        batch = prompts_for_gen[batch_idx: end_idx]
+        current_batch = (batch_idx // cst.SYNTH_GEN_BATCH_SIZE) + 1
+        
+        for retry in range(max_batch_retries):
+            if retry > 0:
+                logger.info(f"Retrying batch {current_batch}/{total_batches} (attempt {retry+1}/{max_batch_retries})")
+            
+            logger.info(f"Processing batch {current_batch}/{total_batches} ({len(batch)} samples)")
+            
+            batch_tasks = []
+            for prompt in batch:
+                async def process_with_retry(p):
+                    for attempt in range(max_retry_attempts):
+                        try:
+                            result = await generate_dpo_reformulation(p, prompts_obj, keypair)
+                            return result
+                        except Exception as e:
+                            if attempt < max_retry_attempts - 1:
+                                logger.info(f"Retrying prompt after error: {e}")
+                            else:
+                                raise
+                    return None
+                
+                batch_tasks.append(process_with_retry(prompt))
+            
+            results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            batch_results = []
+            batch_error_count = 0
+            
+            for idx, result in enumerate(results):
+                if isinstance(result, Exception):
+                    if isinstance(result, json.JSONDecodeError):
+                        json_errors += 1
+                    else:
+                        generic_errors += 1
+                    consecutive_errors += 1
+                    batch_error_count += 1
+                    
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"Maximum consecutive errors reached when generating synthetic DPO dataset. Error: {result}")
+                        consecutive_errors = 0
+                else:
+                    if current_batch == 1 and idx < 5:
+                        logger.info(f"Sample input: {batch[idx]}")
+                        logger.info(f"Sample output: {result}")
+                    consecutive_errors = 0
+                    
+                    dpo_item = validate_and_transform_dpo(result, task)
+                    batch_results.append(dpo_item)
+            
+            synthetic_dataset.extend(batch_results)
+            
+            if batch_results:
+                logger.info(
+                    f"Batch {current_batch}/{total_batches} complete. "
+                    f"Generated {len(batch_results)}/{len(batch)} samples successfully"
+                )
+                
+                if len(batch_results) >= len(batch) * 0.7 or batch_error_count < 3:
+                    break
+        
+        batch_idx = end_idx
+        logger.info(f"Progress: {len(synthetic_dataset)}/{cst.DPO_SYNTHETIC_TOTAL_SIZE} synthetic samples generated")
+    
+    logger.info(
+        f"Finished generating synthetic data. Got {len(synthetic_dataset)} samples total. "
+        f"JSON errors: {json_errors}, Other errors: {generic_errors}"
+    )
+    
+    if len(synthetic_dataset) < cst.DPO_SYNTHETIC_TOTAL_SIZE:
+        missing_samples = cst.DPO_SYNTHETIC_TOTAL_SIZE - len(synthetic_dataset)
+        logger.warning(
+            f"Could only generate {len(synthetic_dataset)}/{cst.DPO_SYNTHETIC_TOTAL_SIZE} "
+            f"synthetic samples. Adding {missing_samples} samples from training data."
+        )
+        
+        additional_train_samples = dataset.shuffle(seed=84).select(range(missing_samples))
+        additional_train_list = [sample for sample in additional_train_samples]
+        
+        logger.info(f"Added {len(additional_train_list)} samples from training data to supplement synthetic dataset")
+        synthetic_dataset.extend(additional_train_list)
+    
+    return synthetic_dataset
+
+
 async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple[str, str, str]:
     should_reupload_train = FileFormat.S3 == task.file_format
     should_reupload_test = task.test_data is None or task.file_format != FileFormat.S3
@@ -411,11 +529,27 @@ async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple
         if cst.GET_SYNTH_DATA:
             logger.info("Generating additional synthetic data")
             if isinstance(task, DpoRawTask):
-                logger.info("DPO task: Sampling from train dataset for synthetic data")
-                _, synthetic_ds = assign_some_of_the_train_to_synth(train_ds, is_dpo=True)
+                logger.info("DPO task: Generating synthetic dataset using TEXT_SYNTH_MODEL and TEXT_SYNTH_WEAKER_MODEL")
+                synthetic_data_list = await generate_synthetic_dpo_data(train_ds, keypair, task)
+                
+                if synthetic_data_list and len(synthetic_data_list) >= cst.DPO_SYNTHETIC_TOTAL_SIZE:
+                    synth_for_training = synthetic_data_list[:cst.DPO_SYNTHETIC_FOR_TRAINING]
+                    synth_for_eval = synthetic_data_list[cst.DPO_SYNTHETIC_FOR_TRAINING:]
+                    
+                    synth_train_dataset = Dataset.from_list(synth_for_training)
+                    train_ds = concatenate_datasets([train_ds, synth_train_dataset])
+                    logger.info(f"Training dataset size after adding {len(synth_for_training)} synthetic examples: {len(train_ds)}")
+                    
+                    train_samples = train_ds.shuffle(seed=42).select(range(cst.DPO_SYNTH_EXAMPLES_FROM_TRAIN))
+                    train_samples_list = [sample for sample in train_samples]
+                    
+                    synthetic_ds = synth_for_eval + train_samples_list
+                    logger.info(f"Created synthetic evaluation dataset with {len(synth_for_eval)} synthetic examples and {len(train_samples_list)} examples from training data")
+                else:
+                    logger.info("Not enough synthetic data generated, falling back to sampling from train")
+                    _, synthetic_ds = assign_some_of_the_train_to_synth(train_ds, is_dpo=True)
             else:
                 synthetic_ds = await get_additional_synth_data(test_ds, columns_to_sample, keypair, task=task)
-
         else:
             logger.info("Skipping synthetic data generation")
     except Exception as e:
