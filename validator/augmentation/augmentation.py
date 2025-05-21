@@ -161,10 +161,8 @@ async def generate_augmented_text_dataset(
         batch = sampled_data[batch_idx : batch_idx + SYNTH_GEN_BATCH_SIZE]
         current_batch = (batch_idx // SYNTH_GEN_BATCH_SIZE) + 1
         logger.info(f"Processing batch {current_batch}/{total_batches} ({len(batch)} samples)")
-
         tasks = [process_row(row, prompts, keypair, task_type) for row in batch]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-
         batch_results = []
         for idx, result in enumerate(results):
             if isinstance(result, Exception):
@@ -177,9 +175,9 @@ async def generate_augmented_text_dataset(
                     logger.error(f"Maximum consecutive errors reached when generating the augmented dataset. Here is one result {result}")
                     return None
             else:
-                if batch_idx == 0 and idx<5:
-                    logger.info(f"Sample input: {batch[idx]}")
-                    logger.info(f"Sample output: {result}")
+                if idx == 0:
+                    logger.info(f"Batch {current_batch} example - Input: {batch[idx]}")
+                    logger.info(f"Batch {current_batch} example - Output: {result}")
                 consecutive_errors = 0  # Reset on success
                 batch_results.append(result)
 

@@ -96,7 +96,6 @@ async def process_non_stream_fiber(
 
     return response.json()
 
-
 async def post_to_nineteen_chat(payload: dict[str, Any], keypair: Keypair) -> str | None:
     response = await _post_to_nineteen_ai(PROMPT_GEN_ENDPOINT, payload, keypair)
     response_json = response.json()
