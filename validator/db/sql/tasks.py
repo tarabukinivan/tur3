@@ -10,6 +10,7 @@ from core.models.utility_models import TaskStatus
 from core.models.utility_models import TaskType
 from validator.core.models import AnyTypeRawTask
 from validator.core.models import AnyTypeTask
+from validator.core.models import DetailedNetworkStats
 from validator.core.models import DpoRawTask
 from validator.core.models import DpoTask
 from validator.core.models import GrpoRawTask
@@ -447,10 +448,8 @@ async def get_synthetic_set_for_task(task_id: str, psql_db: PSQLDB):
 
 async def get_current_task_stats(psql_db: PSQLDB) -> NetworkStats:
     async with await psql_db.connection() as connection:
-        connection: Connection
         query = f"""
             SELECT
-
                 COUNT(*) FILTER (WHERE {cst.STATUS} = $1) as number_of_jobs_training,
                 COUNT(*) FILTER (WHERE {cst.STATUS} = $2) as number_of_jobs_preevaluation,
                 COUNT(*) FILTER (WHERE {cst.STATUS} = $3) as number_of_jobs_evaluating,
@@ -465,6 +464,7 @@ async def get_current_task_stats(psql_db: PSQLDB) -> NetworkStats:
             TaskStatus.EVALUATING.value,
             TaskStatus.SUCCESS.value,
         )
+        
         return NetworkStats(
             number_of_jobs_training=row["number_of_jobs_training"],
             number_of_jobs_preevaluation=row["number_of_jobs_preevaluation"],
@@ -472,6 +472,72 @@ async def get_current_task_stats(psql_db: PSQLDB) -> NetworkStats:
             number_of_jobs_success=row["number_of_jobs_success"],
             next_training_end=row["next_training_end"],
         )
+
+
+async def get_detailed_task_stats(psql_db: PSQLDB) -> DetailedNetworkStats:
+    async with await psql_db.connection() as connection:
+        query = f"""
+            SELECT
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $1) as number_of_jobs_training,
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $2) as number_of_jobs_preevaluation,
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $3) as number_of_jobs_evaluating,
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $4) as number_of_jobs_success,
+                MIN(termination_at) FILTER (WHERE {cst.STATUS} = $1) as next_training_end
+            FROM {cst.TASKS_TABLE}
+        """
+        row = await connection.fetchrow(
+            query,
+            TaskStatus.TRAINING.value,
+            TaskStatus.PREEVALUATION.value,
+            TaskStatus.EVALUATING.value,
+            TaskStatus.SUCCESS.value,
+        )
+        
+        type_query = f"""
+            SELECT
+                {cst.TASK_TYPE},
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $1) as training_count,
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $2) as preevaluation_count,
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $3) as evaluating_count,
+                COUNT(*) FILTER (WHERE {cst.STATUS} = $4) as success_count
+            FROM {cst.TASKS_TABLE}
+            GROUP BY {cst.TASK_TYPE}
+        """
+        type_rows = await connection.fetch(
+            type_query,
+            TaskStatus.TRAINING.value,
+            TaskStatus.PREEVALUATION.value,
+            TaskStatus.EVALUATING.value,
+            TaskStatus.SUCCESS.value,
+        )
+        
+        stats = DetailedNetworkStats(
+            number_of_jobs_training=row["number_of_jobs_training"],
+            number_of_jobs_preevaluation=row["number_of_jobs_preevaluation"],
+            number_of_jobs_evaluating=row["number_of_jobs_evaluating"],
+            number_of_jobs_success=row["number_of_jobs_success"],
+            next_training_end=row["next_training_end"],
+        )
+        
+        type_mapping = {
+            TaskType.INSTRUCTTEXTTASK.value: "instruct",
+            TaskType.DPOTASK.value: "dpo",
+            TaskType.GRPOTASK.value: "grpo",
+            TaskType.IMAGETASK.value: "image"
+        }
+        
+        for row in type_rows:
+            prefix = type_mapping.get(row[cst.TASK_TYPE])
+            if prefix:
+                for status, count in {
+                    "training": row["training_count"],
+                    "preevaluation": row["preevaluation_count"],
+                    "evaluating": row["evaluating_count"],
+                    "success": row["success_count"]
+                }.items():
+                    setattr(stats, f"{prefix}_{status}", count)
+        
+        return stats
 
 
 async def get_tasks_ready_to_evaluate(psql_db: PSQLDB) -> list[RawTask]:

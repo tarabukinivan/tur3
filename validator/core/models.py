@@ -384,6 +384,28 @@ class NetworkStats(BaseModel):
     job_can_be_made: bool = True
 
 
+class DetailedNetworkStats(NetworkStats):
+    instruct_training: int = 0
+    instruct_preevaluation: int = 0
+    instruct_evaluating: int = 0
+    instruct_success: int = 0
+    
+    dpo_training: int = 0
+    dpo_preevaluation: int = 0
+    dpo_evaluating: int = 0
+    dpo_success: int = 0
+    
+    grpo_training: int = 0
+    grpo_preevaluation: int = 0
+    grpo_evaluating: int = 0
+    grpo_success: int = 0
+    
+    image_training: int = 0
+    image_preevaluation: int = 0
+    image_evaluating: int = 0
+    image_success: int = 0
+
+
 class HotkeyDetails(BaseModel):
     hotkey: str
     submission_id: UUID | None = None
