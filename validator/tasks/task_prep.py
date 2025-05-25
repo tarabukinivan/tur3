@@ -363,11 +363,11 @@ def pick_columns_to_sample(task: AnyTextTypeRawTask) -> list[str]:
 
         return columns_to_sample
     elif isinstance(task, DpoRawTask):
-        columns_to_sample = [
-            i for i in [task.field_system, task.field_prompt, task.field_chosen, task.field_rejected] if i is not None
-        ]
+        columns_to_sample = [cst.STANDARD_DPO_PROMPT_COLUMN, cst.STANDARD_DPO_CHOSEN_COLUMN, cst.STANDARD_DPO_REJECTED_COLUMN]
+        if task.field_system:
+            columns_to_sample.append(cst.STANDARD_SYSTEM_COLUMN)
     elif isinstance(task, GrpoRawTask):
-        columns_to_sample = [task.field_prompt] + extract_grpo_extra_columns(task)
+        columns_to_sample = [cst.STANDARD_GRPO_PROMPT_COLUMN] + extract_grpo_extra_columns(task)
     else:
         raise ValueError(f"Unsupported task type: {task.task_type}")
     return columns_to_sample
@@ -375,19 +375,20 @@ def pick_columns_to_sample(task: AnyTextTypeRawTask) -> list[str]:
 
 def validate_and_transform_dpo(data: DpoDatasetColumnsResponse, task: DpoRawTask) -> dict:
     assert isinstance(data, DpoDatasetColumnsResponse)
-    return {task.field_prompt: data.field_prompt, task.field_chosen: data.field_chosen, task.field_rejected: data.field_rejected}
+    return {cst.STANDARD_DPO_PROMPT_COLUMN: data.field_prompt, cst.STANDARD_DPO_CHOSEN_COLUMN: data.field_chosen, cst.STANDARD_DPO_REJECTED_COLUMN: data.field_rejected}
 
 
 async def generate_synthetic_dpo_data(dataset: Dataset, keypair: Keypair, task: DpoRawTask) -> list[dict]:
-    prompt_field = task.field_prompt
-    logger.info(f"Generating synthetic DPO data from the field {prompt_field}")
+    prompt_field = cst.STANDARD_DPO_PROMPT_COLUMN
+    logger.info(f"Generating synthetic DPO data from the standardized field {prompt_field}")
 
     num_samples = min(cst.SYNTHETIC_TOTAL_SIZE * 2, len(dataset))
 
     sampled_data = dataset.shuffle(seed=42).select(range(num_samples))
     prompts = sampled_data[prompt_field]
 
-    prompts_for_gen = [{prompt_field: prompt} for prompt in prompts]
+    # Create dict with standardized key for generate_dpo_reformulation
+    prompts_for_gen = [{cst.STANDARD_DPO_PROMPT_COLUMN: prompt} for prompt in prompts]
 
     prompts_obj = load_prompts()
     logger.info(f"Attempting to generate {cst.SYNTHETIC_TOTAL_SIZE} synthetic DPO samples")
@@ -527,6 +528,52 @@ def standardize_column_names(dataset: Dataset, task: InstructTextRawTask) -> Dat
     return dataset
 
 
+def standardize_dpo_column_names(dataset: Dataset, task: DpoRawTask) -> Dataset:
+    column_mapping = {}
+
+    if task.field_prompt in dataset.column_names:
+        column_mapping[task.field_prompt] = cst.STANDARD_DPO_PROMPT_COLUMN
+    else:
+        raise ValueError(f"Prompt column {task.field_prompt} not found in dataset")
+
+    if task.field_chosen in dataset.column_names:
+        column_mapping[task.field_chosen] = cst.STANDARD_DPO_CHOSEN_COLUMN
+    else:
+        raise ValueError(f"Chosen column {task.field_chosen} not found in dataset")
+
+    if task.field_rejected in dataset.column_names:
+        column_mapping[task.field_rejected] = cst.STANDARD_DPO_REJECTED_COLUMN
+    else:
+        raise ValueError(f"Rejected column {task.field_rejected} not found in dataset")
+
+    if task.field_system:
+        if task.field_system in dataset.column_names:
+            column_mapping[task.field_system] = cst.STANDARD_SYSTEM_COLUMN
+        else:
+            raise ValueError(f"System column {task.field_system} not found in dataset")
+
+    for old_name, new_name in column_mapping.items():
+        if old_name != new_name:
+            dataset = dataset.rename_column(old_name, new_name)
+
+    return dataset
+
+
+def standardize_grpo_column_names(dataset: Dataset, task: GrpoRawTask) -> Dataset:
+    column_mapping = {}
+
+    if task.field_prompt in dataset.column_names:
+        column_mapping[task.field_prompt] = cst.STANDARD_GRPO_PROMPT_COLUMN
+    else:
+        raise ValueError(f"Prompt column {task.field_prompt} not found in dataset")
+
+    for old_name, new_name in column_mapping.items():
+        if old_name != new_name:
+            dataset = dataset.rename_column(old_name, new_name)
+
+    return dataset
+
+
 async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple[str, str, str]:
     should_reupload_train = FileFormat.S3 == task.file_format
     should_reupload_test = task.test_data is None or task.file_format != FileFormat.S3
@@ -556,6 +603,11 @@ async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple
 
             if isinstance(task, InstructTextRawTask):
                 dataset = standardize_column_names(dataset, task)
+            elif isinstance(task, DpoRawTask):
+                dataset = standardize_dpo_column_names(dataset, task)
+            elif isinstance(task, GrpoRawTask):
+                dataset = standardize_grpo_column_names(dataset, task)
+
             
             # Subsample when using only a single dataset (50-100% of original size)
             original_size = len(dataset)
@@ -582,6 +634,12 @@ async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple
             if isinstance(task, InstructTextRawTask):
                 train_ds = standardize_column_names(train_ds, task)
                 test_ds = standardize_column_names(test_ds, task)
+            elif isinstance(task, DpoRawTask):
+                train_ds = standardize_dpo_column_names(train_ds, task)
+                test_ds = standardize_dpo_column_names(test_ds, task)
+            elif isinstance(task, GrpoRawTask):
+                train_ds = standardize_grpo_column_names(train_ds, task)
+                test_ds = standardize_grpo_column_names(test_ds, task)
 
         except Exception as e:
             logger.info(f"There was an issue loading the dataset: {e}")
