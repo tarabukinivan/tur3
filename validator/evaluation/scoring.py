@@ -11,8 +11,11 @@ from core.models.payload_models import DiffusionLosses
 from core.models.payload_models import EvaluationResultImage
 from core.models.payload_models import EvaluationResultText
 from core.models.utility_models import DpoDatasetType
+from core.models.utility_models import TextDatasetType
+from core.models.utility_models import ChatTemplateDatasetType
 from core.models.utility_models import FileFormat
 from core.models.utility_models import GrpoDatasetType
+from core.models.utility_models import ChatTemplateDatasetType
 from core.models.utility_models import InstructTextDatasetType
 from core.models.utility_models import TaskStatus
 from core.models.utility_models import TaskType
@@ -255,24 +258,20 @@ def calculate_miner_ranking_and_scores(
         is_dpo_task = valid_results[0].task_type == TaskType.DPOTASK
         is_grpo_task = valid_results[0].task_type == TaskType.GRPOTASK
         is_instruct_task = valid_results[0].task_type == TaskType.INSTRUCTTEXTTASK
+        is_chat_task = valid_results[0].task_type == TaskType.CHATTASK
 
         # For both DPO and Instruct Text tasks, use max(synth, test)
-        use_max_approach = is_dpo_task or is_instruct_task
+        use_max_approach = is_dpo_task or is_instruct_task or is_chat_task
 
-        if is_dpo_task:
-            logger.info("Processing DPO task with max(test_loss, synth_loss) approach")
-        if is_instruct_task:
-            logger.info("Processing INSTRUCT task with max(test_loss, synth_loss) approach")
-        if is_grpo_task:
+        if use_max_approach:
+            logger.info(f"Processing {valid_results[0].task_type} - using max(test, synth) loss for ranking")
+        else:
             logger.info("Processing GRPO task - higher loss is better")
 
     use_weighted_loss = use_max_approach or _is_synth_loss_valid_for_group(valid_results)
     if use_weighted_loss:
         if use_max_approach:
-            if is_dpo_task:
-                logger.info("Using max(test, synth) loss for DPO task ranking")
-            elif is_instruct_task:
-                logger.info("Using max(test, synth) loss for INSTRUCT task ranking")
+            logger.info(f"Using max loss for ranking {valid_results[0].task_type}")
         else:
             logger.info("Using weighted loss for ranking (at least one miner has valid synth loss)")
 
@@ -382,7 +381,7 @@ def calculate_miner_ranking_and_scores(
     return miner_results
 
 
-def _get_dataset_type(task: AnyTypeRawTask) -> InstructTextDatasetType | DpoDatasetType | GrpoDatasetType | None:
+def _get_dataset_type(task: AnyTypeRawTask) -> TextDatasetType | None:
     if task.task_type == TaskType.INSTRUCTTEXTTASK:
         return InstructTextDatasetType(
             field_system=task.field_system,
@@ -408,6 +407,15 @@ def _get_dataset_type(task: AnyTypeRawTask) -> InstructTextDatasetType | DpoData
         return GrpoDatasetType(
             field_prompt=task.field_prompt,
             reward_functions=task.reward_functions,
+        )
+    elif task.task_type == TaskType.CHATTASK:
+        return ChatTemplateDatasetType(
+            chat_template=task.chat_template,
+            chat_column=task.chat_column,
+            chat_role_field=task.chat_role_field,
+            chat_content_field=task.chat_content_field,
+            chat_user_reference=task.chat_user_reference,
+            chat_assistant_reference=task.chat_assistant_reference,
         )
     else:
         raise ValueError(f"Unknown task type: {task.task_type}")
@@ -468,13 +476,13 @@ async def _evaluate_submissions(
     task: AnyTypeRawTask,
     submission_repos: list[str],
     gpu_ids: list[int],
-    dataset_type: InstructTextDatasetType | DpoDatasetType | GrpoDatasetType | None = None,
+    dataset_type: TextDatasetType | None = None,
 ) -> dict[str, tuple[EvaluationResultText, EvaluationResultText] | EvaluationResultImage | Exception]:
     unique_repos = list(set(submission_repos))
     if len(unique_repos) != len(submission_repos):
         logger.warning(f"Found duplicate repos. Deduplicating {len(submission_repos)} repos to {len(unique_repos)} unique repos")
 
-    if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
+    if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK, TaskType.CHATTASK]:
         results: dict[str, tuple[EvaluationResultText, EvaluationResultText] | Exception] = {}
         repos_to_evaluate = []
         for repo in unique_repos:
@@ -716,7 +724,7 @@ async def process_miners_pool(
     task: AnyTypeRawTask,
     config: Config,
     gpu_ids: list[int],
-    dataset_type: InstructTextDatasetType | DpoDatasetType | GrpoDatasetType | None = None,
+    dataset_type: TextDatasetType | None = None,
 ) -> list[MinerResultsText | MinerResultsImage]:
     assert task.task_id is not None, "We should have a task id when processing miners"
 
@@ -771,7 +779,7 @@ async def process_miners_pool(
                                 )
                         )
                         continue
-                    elif task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
+                    elif task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK, TaskType.CHATTASK]:
                         synth_result, test_result = eval_result
                     elif task.task_type == TaskType.IMAGETASK:
                         test_result = eval_result
@@ -788,7 +796,7 @@ async def process_miners_pool(
                         updated_on=datetime.now(),
                     )
 
-                if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
+                if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK, TaskType.CHATTASK]:
                     results.append(
                         MinerResultsText(
                             hotkey=miner.hotkey,
@@ -849,7 +857,7 @@ async def evaluate_and_score(task: AnyTypeRawTask, gpu_ids: list[int], config: C
     all_scores_zero = all(result.score == 0.0 for result in task_results)
 
     if cts.DELETE_S3_AFTER_COMPLETE:
-        if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK]:
+        if task.task_type in [TaskType.INSTRUCTTEXTTASK, TaskType.DPOTASK, TaskType.GRPOTASK, TaskType.CHATTASK]:
             files_to_delete = [task.training_data, task.test_data, task.synthetic_data]
         elif task.task_type == TaskType.IMAGETASK:
             files_to_delete = [task.training_data, task.test_data]

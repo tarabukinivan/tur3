@@ -29,6 +29,7 @@ from validator.core.models import AnyTextTypeRawTask
 from validator.core.models import DpoRawTask
 from validator.core.models import GrpoRawTask
 from validator.core.models import InstructTextRawTask
+from validator.core.models import ChatRawTask
 from validator.evaluation.utils import get_default_dataset_config
 from validator.utils.cache_clear import delete_dataset_from_cache
 from validator.utils.logging import get_logger
@@ -162,6 +163,8 @@ def adapt_synthetic_columns(synthetic_data: list[dict] | list[DpoDatasetColumnsR
         return [validate_and_transform_dpo(data, task) for data in synthetic_data]
     elif isinstance(task, GrpoRawTask):
         return synthetic_data
+    elif isinstance(task, ChatRawTask):
+        return synthetic_data
     else:
         raise ValueError(f"Unsupported task type: {type(task).__name__}")
 
@@ -175,7 +178,6 @@ async def get_additional_synth_data(
     )
     logger.info(f"Generating {num_samples} additional synthetic data points")
     sampled_data = dataset.shuffle(seed=42).select(range(num_samples))
-
     sampled_data = sampled_data.remove_columns([col for col in sampled_data.column_names if col not in columns_to_sample])
     # NOTE: Need to do something if errors, without trying to then generate synthetic data
     try:
@@ -186,6 +188,7 @@ async def get_additional_synth_data(
 
     synthetic_data = await generate_augmented_text_dataset(sampled_data_list, keypair=keypair, task_type=task.task_type)
     synthetic_data = adapt_synthetic_columns(synthetic_data, task)
+
     return synthetic_data
 
 
@@ -217,9 +220,14 @@ def change_to_json_format(dataset: Dataset, columns: list[str]):
         for col in columns:
             if col in row:
                 value = row[col]
-                str_value = str(value) if value is not None else ""
+                if isinstance(value, str) and value.strip().startswith("[") and value.strip().endswith("]"):
+                    try:
+                        value = json.loads(value)
+                    except json.JSONDecodeError:
+                        pass 
+                str_value = value if value is not None else ""
                 row_dict[col] = str_value
-                if str_value != "":
+                if str_value != "" and str_value != []:
                     is_row_empty = False
         result.append(row_dict)
         total_rows += 1
@@ -279,6 +287,11 @@ async def _process_and_upload_datasets(
     train_dataset, test_dataset, synthetic_data, columns_to_sample, should_reupload_train, should_reupload_test, ds_hf_name=None
 ):
     files_to_delete = []
+    logger.info("Processing and uploading datasets to MinIO storage")
+    logger.info(f"Train dataset: {train_dataset}\nTest dataset: {test_dataset}\nSynthetic data: {synthetic_data}")
+    logger.info(f"Columns to sample: {columns_to_sample}")
+    logger.info(f"Should reupload train: {should_reupload_train}, test: {should_reupload_test}")
+    logger.info(f"Dataset HF name: {ds_hf_name}")
     try:
         if should_reupload_train:
             train_data_json = change_to_json_format(train_dataset, columns_to_sample)
@@ -368,6 +381,8 @@ def pick_columns_to_sample(task: AnyTextTypeRawTask, dataset: Dataset = None) ->
             columns_to_sample.append(cst.STANDARD_SYSTEM_COLUMN)
     elif isinstance(task, GrpoRawTask):
         columns_to_sample = [cst.STANDARD_GRPO_PROMPT_COLUMN] + extract_grpo_extra_columns(task)
+    elif isinstance(task, ChatRawTask):
+        columns_to_sample = [task.chat_column if task.chat_column else cst.STANDARD_CHAT_MESSAGES_COLUMN]
     else:
         raise ValueError(f"Unsupported task type: {task.task_type}")
     return columns_to_sample
@@ -724,11 +739,11 @@ async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple
                     logger.info(
                         f"Created synthetic evaluation dataset with {len(synth_for_eval)} synthetic examples and {len(train_samples_list)} examples from training data"
                     )
-                else:
-                    logger.info("Not enough synthetic data generated, falling back to sampling from train")
-                    _, synthetic_ds = assign_some_of_the_train_to_synth(train_ds, is_dpo=True)
             else:
                 synthetic_ds = await get_additional_synth_data(test_ds, columns_to_sample, keypair, task=task)
+                if synthetic_ds and len(synthetic_ds) > 0:
+                    example = synthetic_ds[0]
+                    logger.info(f"Example synthetic data point for the task: {example}")
         else:
             logger.info("Skipping synthetic data generation")
     except Exception as e:
