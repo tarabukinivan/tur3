@@ -30,6 +30,7 @@ from validator.core.models import ChatRawTask
 from validator.core.models import DpoRawTask
 from validator.core.models import GrpoRawTask
 from validator.core.models import InstructTextRawTask
+from validator.core.models import ChatRawTask
 from validator.evaluation.utils import get_default_dataset_config
 from validator.utils.cache_clear import delete_dataset_from_cache
 from validator.utils.logging import get_logger
@@ -209,10 +210,12 @@ async def download_and_load_dataset(
     return combined_dataset
 
 
-def change_to_json_format(dataset: Dataset, columns: list[str], task: AnyTextTypeRawTask):
+<
+def change_to_json_format(dataset: Dataset, columns: list[str], task: AnyTextTypeRawTask = None):
     result = []
     total_rows = 0
     fully_empty_rows = 0
+    is_chat_task = isinstance(task, ChatRawTask)
 
     for row in dataset:
         row_dict = {}
@@ -220,18 +223,24 @@ def change_to_json_format(dataset: Dataset, columns: list[str], task: AnyTextTyp
         for col in columns:
             if col in row:
                 value = row[col]
-                if isinstance(task, ChatRawTask):
-                    if isinstance(value, str) and value.strip().startswith("[") and value.strip().endswith("]"):
-                        try:
-                            value = json.loads(value)
-                        except json.JSONDecodeError:
-                            pass
-                    str_value = value if value is not None else ""
+                
+                # Only parse JSON strings for ChatTask types
+                if is_chat_task and isinstance(value, str) and value.strip().startswith("[") and value.strip().endswith("]"):
+                    try:
+                        value = json.loads(value)
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Ensure consistent data types: strings for non-ChatTask, preserve type for ChatTask
+                if is_chat_task:
+                    processed_value = value if value is not None else ""
                 else:
-                    str_value = str(value) if value is not None else ""
-                row_dict[col] = str_value
-                if str_value != "" and str_value != []:
+                    processed_value = str(value) if value is not None else ""
+                
+                row_dict[col] = processed_value
+                if processed_value != "" and processed_value != []:
                     is_row_empty = False
+                    
         result.append(row_dict)
         total_rows += 1
         if is_row_empty:
@@ -287,14 +296,9 @@ def assign_some_of_the_train_to_synth(train_dataset: Dataset, is_dpo: bool = Fal
 
 
 async def _process_and_upload_datasets(
-    task: AnyTextTypeRawTask,
-    train_dataset,
-    test_dataset,
-    synthetic_data,
-    columns_to_sample,
-    should_reupload_train,
-    should_reupload_test,
-    ds_hf_name=None,
+
+    train_dataset, test_dataset, synthetic_data, columns_to_sample, should_reupload_train, should_reupload_test, ds_hf_name=None, task=None
+
 ):
     files_to_delete = []
     logger.info("Processing and uploading datasets to MinIO storage")
@@ -775,6 +779,7 @@ async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple
         should_reupload_train,
         should_reupload_test,
         train_dataset_name if task.file_format == FileFormat.HF else None,
+        task,
     )
 
 
