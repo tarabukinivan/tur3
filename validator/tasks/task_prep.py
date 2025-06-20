@@ -294,9 +294,8 @@ def assign_some_of_the_train_to_synth(train_dataset: Dataset, is_dpo: bool = Fal
 
 
 async def _process_and_upload_datasets(
-
-    train_dataset, test_dataset, synthetic_data, columns_to_sample, should_reupload_train, should_reupload_test, ds_hf_name=None, task=None
-
+    task: AnyTextTypeRawTask,
+    train_dataset, test_dataset, synthetic_data, columns_to_sample, should_reupload_train, should_reupload_test, ds_hf_name=None
 ):
     files_to_delete = []
     logger.info("Processing and uploading datasets to MinIO storage")
@@ -777,7 +776,6 @@ async def prepare_text_task(task: AnyTextTypeRawTask, keypair: Keypair) -> tuple
         should_reupload_train,
         should_reupload_test,
         train_dataset_name if task.file_format == FileFormat.HF else None,
-        task,
     )
 
 
