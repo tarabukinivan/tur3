@@ -18,7 +18,7 @@ from pydantic import ValidationError
 import core.constants as cst
 from core.models.payload_models import MinerTaskOffer
 from core.models.payload_models import MinerTaskResponse
-from core.models.utility_models import Submission
+from core.models.utility_models import MinerSubmission
 from validator.utils.hash_verification import calculate_model_hash
 from core.models.payload_models import TrainRequestGrpo
 from core.models.payload_models import TrainRequestImage
@@ -139,7 +139,7 @@ async def tune_model_diffusion(
     return {"message": "Training job enqueued.", "task_id": job.job_id}
 
 
-async def get_latest_model_submission(task_id: str) -> Submission:
+async def get_latest_model_submission(task_id: str) -> MinerSubmission:
     try:
         config_filename = f"{task_id}.yml"
         config_path = os.path.join(cst.CONFIG_DIR, config_filename)
@@ -161,7 +161,7 @@ async def get_latest_model_submission(task_id: str) -> Submission:
 
         model_hash = calculate_model_hash(repo_id)
         
-        return Submission(repo=repo_id, model_hash=model_hash)
+        return MinerSubmission(repo=repo_id, model_hash=model_hash)
 
     except FileNotFoundError as e:
         logger.error(f"No submission found for task {task_id}: {str(e)}")
@@ -276,7 +276,7 @@ def factory_router() -> APIRouter:
         get_latest_model_submission,
         tags=["Subnet"],
         methods=["GET"],
-        response_model=Submission,
+        response_model=MinerSubmission,
         summary="Get Latest Model Submission",
         description="Retrieve the latest model submission for a given task ID",
         dependencies=[Depends(blacklist_low_stake), Depends(verify_get_request)],
