@@ -4,6 +4,8 @@ from core.constants import GRPO_DEFAULT_FIELD_PROMPT
 from core.constants import NETUID
 
 
+RAYONLABS_HF_USERNAME = "rayonlabs"
+
 SUCCESS = "success"
 ACCOUNT_ID = "account_id"
 MESSAGE = "message"
@@ -32,6 +34,7 @@ START_TRAINING_GRPO_ENDPOINT = "/start_training_grpo/"
 TASK_OFFER_ENDPOINT = "/task_offer/"
 TASK_OFFER_IMAGE_ENDPOINT = "/task_offer_image/"
 SUBMISSION_ENDPOINT = "/get_latest_model_submission/"
+TRAINING_REPO_ENDPOINT = "/training_repo"
 
 # TODO update when live
 DEV_CONTENT_BASE_URL = "https://dev.content.gradients.io"
@@ -131,6 +134,15 @@ EMISSION_BURN_HOTKEY = "5GU4Xkd3dCGTU3s8VLcHGc5wsD5M8XyxDca5yDQhYm1mVXFu"
 # Task Stuff
 MINIMUM_MINER_POOL = 1
 
+# Tournament Start Requirements
+MIN_MINERS_FOR_TOURN = 8
+
+# Tournament Selection by Stake
+TOURNAMENT_TOP_N_BY_STAKE = 32
+TOURNAMENT_REPEAT_BOOST_PERCENTAGE = 5  # 5% boost per previous entry
+TOURNAMENT_MAX_REPEAT_BOOST_PERCENTAGE = 25  # Maximum 25% boost
+TOURNAMENT_PARTICIPATION_WEIGHT = 0.005  # Weight given to active participants
+
 # General miner pool sizes
 MIN_IDEAL_NUM_MINERS_IN_POOL = 8
 MAX_IDEAL_NUM_MINERS_IN_POOL = 15
@@ -147,6 +159,15 @@ MAX_DELAY_TIMES = 6
 # Maximum number of evaluation attempts when all scores are zero (including the first one)
 MAX_EVAL_ATTEMPTS = 4
 MODEL_SIZE_REQUIRING_2_GPUS = 35 * 10**9  # 35B params
+
+# Tournament GPU requirement thresholds (in billions of parameters)
+TOURNAMENT_GPU_THRESHOLD_FOR_2X_H100 = 4.0
+TOURNAMENT_GPU_THRESHOLD_FOR_4X_H100 = 12.0
+TOURNAMENT_GPU_THRESHOLD_FOR_8X_H100 = 40.0
+
+# Tournament task type GPU multipliers
+TOURNAMENT_DPO_GPU_MULTIPLIER = 3
+TOURNAMENT_GRPO_GPU_MULTIPLIER = 2
 MODEL_SIZE_REQUIRING_3_GPUS = 75 * 10**9
 MODEL_SIZE_REQUIRING_4_GPUS = 110 * 10**9
 
@@ -245,6 +266,17 @@ SEVEN_DAY_SCORE_WEIGHT = 0.4
 THREE_DAY_SCORE_WEIGHT = 0.3
 ONE_DAY_SCORE_WEIGHT = 0.3
 
+TOURNAMENT_TEXT_WEIGHT = 0.6
+TOURNAMENT_IMAGE_WEIGHT = 0.4
+TOURNAMENT_INTERVAL_DAYS = 14
+BURN_REDUCTION_RATE = 5.0
+MAX_BURN_REDUCTION = 0.9
+BASE_REGULAR_WEIGHT = 0.35
+BASE_TOURNAMENT_WEIGHT = 0.4
+
+# Emission distribution when performance diff occurs
+LEGACY_PERFORM_DIFF_EMISSION_GAIN_PERCENT = 0.25
+
 # HF models cache management
 CACHE_TAU_DAYS = 10  # Time constant (τ) for exponential decay in days
 CACHE_MAX_LOOKUP_DAYS = 30  # Maximum number of days to look back for usage data
@@ -268,7 +300,6 @@ CHAIN_WEIGHT_DIVISOR = 65535
 # GRPO evaluation
 TRL_GRPO_FIELD_PROMPT = GRPO_DEFAULT_FIELD_PROMPT
 
-WEIGHT_FOR_TOURN = 0.5
 
 MIN_SYNTH_JOBS_REQUIRED_PER_DAY = 3
 
@@ -279,7 +310,6 @@ BETA_GRPO = 0.04
 # GRPO evaluation
 GRPO_INITIAL_BATCH_SIZE = 32
 GRPO_DEFAULT_NUM_GENERATIONS = 2
-
 
 STANDARD_INSTRUCT_COLUMN = "instruct"
 STANDARD_INPUT_COLUMN = "input"
@@ -295,3 +325,16 @@ STANDARD_CHAT_ROLE_USER = "human"
 STANDARD_CHAT_ROLE_ASSISTANT = "gpt"
 STANDARD_CHAT_ROLE_FIELD = "from"
 STANDARD_CHAT_CONTENT_FIELD = "value"
+
+
+
+# Trainer endpoints
+
+PROXY_TRAINING_IMAGE_ENDPOINT = "/v1/trainer/start_training"
+GET_GPU_AVAILABILITY_ENDPOINT = "/v1/trainer/get_gpu_availability"
+TASK_DETAILS_ENDPOINT = "/v1/trainer/{task_id}"
+
+# Tournament constants
+DEFAULT_PARTICIPANT_REPO = "https://github.com/rayonlabs/G.O.D"
+DEFAULT_PARTICIPANT_COMMIT = "0bc824a3f21b76ad59ff6810e921c1efdb80e6fe"
+

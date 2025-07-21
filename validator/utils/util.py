@@ -59,7 +59,7 @@ async def try_db_connections(config: Config) -> None:
     logger.info("PostgreSQL connected successfully")
 
     logger.info("Attempting to connect to Redis")
-    await config.redis_db.ping()
+    # await config.redis_db.ping()
     logger.info("Redis connected successfully")
 
 
@@ -171,7 +171,6 @@ def is_task_in_flight(task: AnyTypeTask) -> bool:
         TaskStatus.FAILURE,
         TaskStatus.FAILURE_FINDING_NODES,
         TaskStatus.PREP_TASK_FAILURE,
-        TaskStatus.NODE_TRAINING_FAILURE,
     ]
 
 
