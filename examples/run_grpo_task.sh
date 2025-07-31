@@ -1,25 +1,32 @@
 #!/bin/bash
 
-TASK_ID="7719761b-73c5-4100-98fb-cbe5a6847737"
+TASK_ID="8832a4bc-5e99-4d70-a5c9-2605c3b4e1f2"
 MODEL="Qwen/Qwen3-0.6B"
-DATASET="https://gradients.s3.eu-north-1.amazonaws.com/7368185aedf4fbd2_test_data.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVVZOOA7SA4UOFLPI%2F20250718%2Feu-north-1%2Fs3%2Faws4_request&X-Amz-Date=20250718T124132Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=43bb4ef1de380a0635f4b1da724e6c065f3067861c639b9f67b3cdb88208febd"
+DATASET="https://gradients.s3.eu-north-1.amazonaws.com/ff48d393207a45b9_test_data.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVVZOOA7SA4UOFLPI%2F20250730%2Feu-north-1%2Fs3%2Faws4_request&X-Amz-Date=20250730T195033Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=5318790ec1960c516985bca92847bd5a2871f680034153a3d831fc7d0950a8d8"
 DATASET_TYPE='{
   "field_prompt":"prompt",
-  "field_chosen":"chosen",
-  "field_rejected":"rejected",
-  "prompt_format":"{prompt}",
-  "chosen_format":"{chosen}",
-  "rejected_format":"{rejected}"
+  "reward_functions":[
+    {
+      "reward_func":"def reward_func(completions, **kwargs):\n    # Count frequency of letter \"e\" in response\n    return [text.count(\"e\") / (len(text) + 1) for text in completions]",
+      "reward_weight":0.7,
+      "name":"e_counter"
+    },
+    {
+      "reward_func":"def reward_func(completions, **kwargs):\n    # Reward responses that are long but not too long\n    return [min(len(text)/100, 1.0) for text in completions]",
+      "reward_weight":0.3,
+      "name":"length_scorer"
+    }
+  ]
 }'
 FILE_FORMAT="s3"
-HOURS_TO_COMPLETE=8
+HOURS_TO_COMPLETE=12
 
 
 # For uploading the outputs
 HUGGINGFACE_TOKEN="Your Huggingface Token"
 WANDB_TOKEN="Your WandB Token"
 HUGGINGFACE_USERNAME="Your Huggingface Username"
-EXPECTED_REPO_NAME="dpotest"
+EXPECTED_REPO_NAME="grpotest"
 LOCAL_FOLDER="/app/checkpoints/$TASK_ID/$EXPECTED_REPO_NAME"
 
 
@@ -49,7 +56,7 @@ docker run --rm \
   --model "$MODEL" \
   --dataset "$DATASET" \
   --file-format "$FILE_FORMAT" \
-  --task-type "DpoTask"
+  --task-type "GrpoTask"
 
 
 docker run --rm --gpus all \
@@ -60,13 +67,13 @@ docker run --rm --gpus all \
   --network none \
   --volume "$CHECKPOINTS_DIR:/cache:rw" \
   --volume "$OUTPUTS_DIR:/app/checkpoints/:rw" \
-  --name dpo-text-trainer-example \
+  --name grpo-text-trainer-example \
   standalone-text-trainer \
   --task-id "$TASK_ID" \
   --model "$MODEL" \
   --dataset "$DATASET" \
   --dataset-type "$DATASET_TYPE" \
-  --task-type "DpoTask" \
+  --task-type "GrpoTask" \
   --file-format "$FILE_FORMAT" \
   --hours-to-complete "$HOURS_TO_COMPLETE" \
   --expected-repo-name "$EXPECTED_REPO_NAME" \
@@ -84,4 +91,3 @@ docker run --rm --gpus all \
   --env LOCAL_FOLDER="$LOCAL_FOLDER" \
   --name hf-uploader \
   hf-uploader
-
