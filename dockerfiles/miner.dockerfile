@@ -1,4 +1,4 @@
-FROM axolotlai/axolotl:main-py3.11-cu124-2.5.1
+FROM axolotlai/axolotl-cloud:main-20250708-py3.11-cu124-2.6.0
 
 RUN pip install mlflow
 RUN pip install textstat==0.7.7
