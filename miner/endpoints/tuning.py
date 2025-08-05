@@ -195,9 +195,6 @@ async def task_offer(
                 accepted=False,
             )
 
-        if "llama" not in request.model.lower():
-            return MinerTaskResponse(message="I'm not yet optimised and only accept llama-type jobs", accepted=False)
-
         if current_job_finish_time is None or current_time + timedelta(hours=1) > current_job_finish_time:
             if request.hours_to_complete < 13:
                 logger.info("Accepting the offer - ty snr")
@@ -234,7 +231,7 @@ async def task_offer_image(
             return MinerTaskResponse(message="This endpoint only accepts image tasks", accepted=False)
 
         if current_job_finish_time is None or current_time + timedelta(hours=1) > current_job_finish_time:
-            if request.hours_to_complete < 3:
+            if request.hours_to_complete < 13:
                 logger.info("Accepting the image offer")
                 return MinerTaskResponse(message="Yes. I can do image jobs", accepted=True)
             else:
